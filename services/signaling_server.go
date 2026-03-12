@@ -9,11 +9,29 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+// wsConn 對 gorilla/websocket.Conn 的執行緒安全包裝
+// gorilla/websocket 不允許並發寫入，透過 wmu 序列化所有 WriteJSON 呼叫
+type wsConn struct {
+	conn *websocket.Conn
+	wmu  sync.Mutex
+}
+
+func newWSConn(conn *websocket.Conn) *wsConn {
+	return &wsConn{conn: conn}
+}
+
+// WriteJSON 序列化寫入，避免 "concurrent write to websocket connection" panic
+func (c *wsConn) WriteJSON(v interface{}) error {
+	c.wmu.Lock()
+	defer c.wmu.Unlock()
+	return c.conn.WriteJSON(v)
+}
+
 // SignalingServer manages WebSocket connections and relays signaling messages
 type SignalingServer struct {
 	roomManager *RoomManager
-	connections map[string]*websocket.Conn
-	rooms       map[string]map[string]*websocket.Conn // roomID -> playerID -> connection
+	connections map[string]*wsConn
+	rooms       map[string]map[string]*wsConn // roomID -> playerID -> connection
 	mu          sync.RWMutex
 }
 
@@ -21,8 +39,8 @@ type SignalingServer struct {
 func NewSignalingServer(roomManager *RoomManager) *SignalingServer {
 	return &SignalingServer{
 		roomManager: roomManager,
-		connections: make(map[string]*websocket.Conn),
-		rooms:       make(map[string]map[string]*websocket.Conn),
+		connections: make(map[string]*wsConn),
+		rooms:       make(map[string]map[string]*wsConn),
 	}
 }
 
@@ -31,7 +49,7 @@ func (ss *SignalingServer) RegisterConnection(playerID string, conn *websocket.C
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
 
-	ss.connections[playerID] = conn
+	ss.connections[playerID] = newWSConn(conn)
 }
 
 // UnregisterConnection removes a WebSocket connection
@@ -40,7 +58,7 @@ func (ss *SignalingServer) UnregisterConnection(playerID string) {
 	defer ss.mu.Unlock()
 
 	delete(ss.connections, playerID)
-	
+
 	// Remove from all rooms
 	for roomID, players := range ss.rooms {
 		delete(players, playerID)
@@ -50,15 +68,18 @@ func (ss *SignalingServer) UnregisterConnection(playerID string) {
 	}
 }
 
-// JoinSignalingRoom adds a player's connection to a room
-func (ss *SignalingServer) JoinSignalingRoom(roomID, playerID string, conn *websocket.Conn) {
+// JoinSignalingRoom adds a player's connection to a room.
+// 連線必須事先透過 RegisterConnection 注冊，此處直接重用以確保 mutex 共用。
+func (ss *SignalingServer) JoinSignalingRoom(roomID, playerID string) {
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
 
 	if ss.rooms[roomID] == nil {
-		ss.rooms[roomID] = make(map[string]*websocket.Conn)
+		ss.rooms[roomID] = make(map[string]*wsConn)
 	}
-	ss.rooms[roomID][playerID] = conn
+	if wc, exists := ss.connections[playerID]; exists {
+		ss.rooms[roomID][playerID] = wc
+	}
 }
 
 // LeaveSignalingRoom removes a player's connection from a room
@@ -81,16 +102,15 @@ func (ss *SignalingServer) RelaySignal(signal models.SignalMessage) error {
 
 	// If targetID is specified, send to specific player
 	if signal.TargetID != "" {
-		conn, exists := ss.connections[signal.TargetID]
+		wc, exists := ss.connections[signal.TargetID]
 		if !exists {
 			log.Printf("Target player %s not found", signal.TargetID)
 			return nil
 		}
-		// Skip nil connections
-		if conn == nil {
+		if wc == nil {
 			return nil
 		}
-		return conn.WriteJSON(signal)
+		return wc.WriteJSON(signal)
 	}
 
 	// Otherwise, broadcast to all players in the room except sender
@@ -100,13 +120,12 @@ func (ss *SignalingServer) RelaySignal(signal models.SignalMessage) error {
 		return nil
 	}
 
-	for playerID, conn := range players {
+	for playerID, wc := range players {
 		if playerID != signal.SenderID {
-			// Skip nil connections
-			if conn == nil {
+			if wc == nil {
 				continue
 			}
-			if err := conn.WriteJSON(signal); err != nil {
+			if err := wc.WriteJSON(signal); err != nil {
 				log.Printf("Error sending to player %s: %v", playerID, err)
 			}
 		}
@@ -126,13 +145,11 @@ func (ss *SignalingServer) BroadcastToRoom(roomID string, message interface{}) e
 		return nil
 	}
 
-	for playerID, conn := range players {
-		// Skip nil connections (can happen in tests or during cleanup)
-		if conn == nil {
+	for playerID, wc := range players {
+		if wc == nil {
 			continue
 		}
-		
-		if err := conn.WriteJSON(message); err != nil {
+		if err := wc.WriteJSON(message); err != nil {
 			log.Printf("Error broadcasting to player %s: %v", playerID, err)
 		}
 	}
@@ -155,7 +172,7 @@ func (ss *SignalingServer) HandleMessage(playerID string, messageData []byte) er
 	case "join_room":
 		// Player is joining a room via WebSocket
 		if roomID, ok := signal.Payload.(map[string]interface{})["roomId"].(string); ok {
-			ss.JoinSignalingRoom(roomID, playerID, ss.connections[playerID])
+			ss.JoinSignalingRoom(roomID, playerID)
 		}
 	case "leave_room":
 		// Player is leaving a room via WebSocket
@@ -203,6 +220,14 @@ func (ss *SignalingServer) HandlePlayerDisconnect(playerID, roomID string) {
 	}
 	
 	ss.mu.Unlock()
+
+	// 重新從 RoomManager 取得最新的 InGame 狀態
+	// 避免 game_started 與玩家斷線並發時，讀到舊的 InGame=false 的競爭條件
+	if roomID != "" {
+		if freshRoom, err := ss.roomManager.GetRoom(roomID); err == nil && freshRoom != nil {
+			room = freshRoom
+		}
+	}
 
 	// If game is in progress, skip room deletion and room_closed broadcast
 	inGame := room != nil && room.InGame

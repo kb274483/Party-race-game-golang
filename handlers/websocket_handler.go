@@ -53,7 +53,7 @@ func (wsh *WebSocketHandler) HandleWebSocket(c *gin.Context) {
 
 	// If roomID is provided, join the signaling room
 	if roomID != "" {
-		wsh.signalingServer.JoinSignalingRoom(roomID, playerID, conn)
+		wsh.signalingServer.JoinSignalingRoom(roomID, playerID)
 	}
 
 	log.Printf("Player %s connected (room: %s)", playerID, roomID)
