@@ -22,6 +22,9 @@ func newWSConn(conn *websocket.Conn) *wsConn {
 
 // WriteJSON 序列化寫入，避免 "concurrent write to websocket connection" panic
 func (c *wsConn) WriteJSON(v interface{}) error {
+	if c.conn == nil {
+		return nil
+	}
 	c.wmu.Lock()
 	defer c.wmu.Unlock()
 	return c.conn.WriteJSON(v)

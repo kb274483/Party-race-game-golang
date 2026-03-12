@@ -18,11 +18,23 @@ func main() {
 	// Initialize Gin router
 	router := gin.Default()
 
-	// Configure CORS - 允許所有來源（含區域網路 IP，適用本地派對遊戲）
-	config := cors.DefaultConfig()
-	config.AllowAllOrigins = true
-	config.AllowMethods = []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"}
-	config.AllowHeaders = []string{"Origin", "Content-Type", "Accept"}
+	// Configure CORS - 限制允許的來源
+	allowedOrigins := []string{
+		"https://party-race-game.vercel.app",
+	}
+	// 開發環境額外允許 localhost
+	if os.Getenv("ENV") != "production" {
+		allowedOrigins = append(allowedOrigins,
+			"http://localhost:3000",
+			"http://localhost:3001",
+			"http://127.0.0.1:3000",
+		)
+	}
+	config := cors.Config{
+		AllowOrigins: allowedOrigins,
+		AllowMethods: []string{"GET", "POST", "DELETE", "OPTIONS"},
+		AllowHeaders: []string{"Origin", "Content-Type", "Accept"},
+	}
 	router.Use(cors.New(config))
 
 	// Initialize handlers

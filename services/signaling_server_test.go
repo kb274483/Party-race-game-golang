@@ -4,29 +4,16 @@ import (
 	"encoding/json"
 	"party-race-game-backend/models"
 	"testing"
-
-	"github.com/gorilla/websocket"
 )
-
-// Mock WebSocket connection for testing
-type mockConn struct {
-	messages []interface{}
-}
-
-func (m *mockConn) WriteJSON(v interface{}) error {
-	m.messages = append(m.messages, v)
-	return nil
-}
 
 func TestRegisterAndUnregisterConnection(t *testing.T) {
 	rm := NewRoomManager()
 	ss := NewSignalingServer(rm)
 
-	conn := &mockConn{}
 	playerID := "player1"
 
-	// Register connection
-	ss.RegisterConnection(playerID, (*websocket.Conn)(nil))
+	// Register connection（使用 nil conn，測試 map 操作即可）
+	ss.RegisterConnection(playerID, nil)
 
 	// Verify connection is registered
 	ss.mu.RLock()
@@ -48,8 +35,6 @@ func TestRegisterAndUnregisterConnection(t *testing.T) {
 	if exists {
 		t.Error("Connection should be unregistered")
 	}
-
-	_ = conn // Use conn to avoid unused variable error
 }
 
 func TestJoinAndLeaveSignalingRoom(t *testing.T) {
@@ -58,10 +43,10 @@ func TestJoinAndLeaveSignalingRoom(t *testing.T) {
 
 	roomID := "ROOM123"
 	playerID := "player1"
-	conn := &mockConn{}
 
-	// Join signaling room
-	ss.JoinSignalingRoom(roomID, playerID, (*websocket.Conn)(nil))
+	// 先 Register，再 Join（JoinSignalingRoom 從 connections 重用 wsConn）
+	ss.RegisterConnection(playerID, nil)
+	ss.JoinSignalingRoom(roomID, playerID)
 
 	// Verify player is in room
 	ss.mu.RLock()
@@ -87,8 +72,6 @@ func TestJoinAndLeaveSignalingRoom(t *testing.T) {
 	if exists && len(players) > 0 {
 		t.Error("Player should be removed from signaling room")
 	}
-
-	_ = conn // Use conn to avoid unused variable error
 }
 
 func TestHandlePlayerDisconnect(t *testing.T) {
@@ -100,12 +83,12 @@ func TestHandlePlayerDisconnect(t *testing.T) {
 	rm.JoinRoom(room.ID, "player1", "Player One", "")
 
 	// Register connections
-	ss.RegisterConnection("host123", (*websocket.Conn)(nil))
-	ss.RegisterConnection("player1", (*websocket.Conn)(nil))
+	ss.RegisterConnection("host123", nil)
+	ss.RegisterConnection("player1", nil)
 
 	// Join signaling rooms
-	ss.JoinSignalingRoom(room.ID, "host123", (*websocket.Conn)(nil))
-	ss.JoinSignalingRoom(room.ID, "player1", (*websocket.Conn)(nil))
+	ss.JoinSignalingRoom(room.ID, "host123")
+	ss.JoinSignalingRoom(room.ID, "player1")
 
 	// Player disconnects
 	ss.HandlePlayerDisconnect("player1", room.ID)
@@ -135,12 +118,12 @@ func TestHandlePlayerDisconnectHostLeaves(t *testing.T) {
 	rm.JoinRoom(room.ID, "player1", "Player One", "")
 
 	// Register connections
-	ss.RegisterConnection("host123", (*websocket.Conn)(nil))
-	ss.RegisterConnection("player1", (*websocket.Conn)(nil))
+	ss.RegisterConnection("host123", nil)
+	ss.RegisterConnection("player1", nil)
 
 	// Join signaling rooms
-	ss.JoinSignalingRoom(room.ID, "host123", (*websocket.Conn)(nil))
-	ss.JoinSignalingRoom(room.ID, "player1", (*websocket.Conn)(nil))
+	ss.JoinSignalingRoom(room.ID, "host123")
+	ss.JoinSignalingRoom(room.ID, "player1")
 
 	// Host disconnects
 	ss.HandlePlayerDisconnect("host123", room.ID)
@@ -160,7 +143,7 @@ func TestHandleMessage(t *testing.T) {
 	roomID := "ROOM123"
 
 	// Register connection
-	ss.RegisterConnection(playerID, (*websocket.Conn)(nil))
+	ss.RegisterConnection(playerID, nil)
 
 	// Create a signal message
 	signal := models.SignalMessage{
