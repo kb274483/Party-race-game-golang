@@ -21,13 +21,17 @@ func main() {
 	// Configure CORS - 限制允許的來源
 	allowedOrigins := []string{
 		"https://party-race-game.vercel.app",
+		"https://party-fighter.vercel.app",
 	}
 	// 開發環境額外允許 localhost
 	if os.Getenv("ENV") != "production" {
 		allowedOrigins = append(allowedOrigins,
 			"http://localhost:3000",
-			"http://localhost:3001",
+			"http://localhost:3002",
 			"http://127.0.0.1:3000",
+			"http://127.0.0.1:3002",
+			"http://192.168.1.41:3000",
+			"http://192.168.1.41:3002",
 		)
 	}
 	config := cors.Config{
